@@ -1,10 +1,16 @@
 {
   "special_ticker": {
-
+    "CoinExchange": 1641
   },
   "ticker": [
+    "Crex24",
+    "Graviex",
     "CryptoBridge",
-    "Crex24"
+    "Coinexchange",
+    "Stex",
+    "Midex",
+    "CITEX",
+    "StakeCube"
   ],
   "color": {
     "prices": 3447003,
@@ -14,52 +20,36 @@
     "error": 9375030
   },
   "devs": [
-    "422003829098414100",
-    "450447363119644685",
-    "464599914962485260"
+    "381526280199471134",
+    "361165988378574850"
   ],
+  "tiers": {
+    "1" : {"level": 1, "label": "Bronze", "color": 13467442},
+    "2" : {"level": 2, "label": "Silver", "color": 12632319},
+    "3" : {"level": 3, "label": "Gold", "color": 16766720},
+    "4" : {"level": 4, "label": "Platinum", "color": 14671065}
+  },
   "stages": [
     {
-      "block": 130000,
-      "coll": 5000,
-      "mn": 70.08,
-      "pos": 2.92
+      "block": 187805,
+      "coll": {"1": 5000, "2": 25000, "3": 50000, "4": 250000},
+      "blocktime": 60,
+      "pos": 9,
+      "mn": {"1": 10, "2": 15, "3": 15, "4": 1}
     },
     {
-      "block": 180000,
-      "coll": 10000,
-      "mn": 83.69,
-      "pos": 2.79
+      "block": 392807,
+      "coll": {"1": 5000, "2": 25000, "3": 50000, "4": 250000},
+      "blocktime": 120,
+      "pos": 9,
+      "mn": {"1": 10, "2": 15, "3": 15, "4": 1}
     },
     {
-      "block": 240000,
-      "coll": 15000,
-      "mn": 101.69,
-      "pos": 3.39
-    },
-    {
-      "block": 300000,
-      "coll": 20000,
-      "mn": 110.69,
-      "pos": 3.69
-    },
-    {
-      "block": 400000,
-      "coll": 25000,
-      "mn": 83.69,
-      "pos": 2.79
-    },
-    {
-      "block": 500000,
-      "coll": 30000,
-      "mn": 56.69,
-      "pos": 1.89
-    },
-    {
-      "block": -1,
-      "coll": 30000,
-      "mn": 9.00,
-      "pos": 1.00
+      "block": 522808,
+      "coll": {"1": 5000, "2": 25000, "3": 50000, "4": 250000},
+      "blocktime": 120,
+      "pos": 9,
+      "mn": {"1": 10, "2": 15, "3": 15, "4": 1}
     }
   ],
   "requests": {
@@ -73,28 +63,32 @@
   },
   "statorder": [
     "blockcount",
-    "mncount",
     "supply",
-    "collateral",
-    "mnreward",
-    "powreward",
-    "posreward",
+    "mncount",
+    "blockreward",
+    "devfee",
+    "posreward"
+  ],
+  "statorderMN": [
+    "mninf1",
+    "mninf2",
     "locked",
-    "avgmnreward",
-    "nextstage"
+    "mninf3",
+    "mninf4",
+    ""
   ],
   "monitor": {
     "enabled": true,
-    "channel": "531519255519428638",
-    "interval": 60
+    "channel": "564536774777503748",
+    "interval": 300
   },
   "hidenotsupported": false,
   "useraddrs": true,
   "usermns": true,
   "sourcecode": "https://github.com/neo3587/discord_cryptobot",
-  "channel": [ "479496777700212746" ],
-  "prefix": "!",
-  "coin": "BCARD",
+  "channel": [ "478642846845501450" ],
+  "prefix": "?",
+  "coin": "ESBC",
   "blocktime": 60,
   "token": "NDkwNTM4NjY1NzY4OTEwODQ5.Dn66EQ.krDSiz630cqIS9Fuywa5BSdyMGI"
 }

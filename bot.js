@@ -18,7 +18,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 
-const config_json_file = path.dirname(process.argv[1]) + "/config.json"; 
+const config_json_file = path.dirname(process.argv[1]) + "/config.json";
 const users_addr_folder = path.dirname(process.argv[1]) + "/.db_users_addr";
 const users_mn_folder = path.dirname(process.argv[1]) + "/.db_users_mn";
 
@@ -29,7 +29,7 @@ const users_mn_folder = path.dirname(process.argv[1]) + "/.db_users_mn";
   * @property {number[]} color -
   * @property {string[]} devs -
   * @property {{block: number, coll?: number, mn?: number, pos?: number, pow?: number}[]} stages -
-  * @property {{blockcount: string, mncount: string, supply: string, balance: string, blockindex: string, blockhash: string, mnstat: string}} requests -
+  * @property {{blockcount: string, mncount: string, supply: string, balance: string, blockindex: string, blockhash: string, mnlist: string}} requests -
   * @property {string[]} startorder -
   * @property {{enabled: true, channel: string, interval: 60}} monitor -
   * @property {boolean} hidenotsupported -
@@ -44,7 +44,7 @@ const users_mn_folder = path.dirname(process.argv[1]) + "/.db_users_mn";
 /** @type {Configuration} */
 const conf = require(config_json_file);
 const client = new Discord.Client();
-
+var cache = {};
 
 class ExchangeData {
     constructor(name) {
@@ -79,12 +79,12 @@ function start_monitor() {
         const channel = client.channels.get(conf.monitor.channel);
         let embeds = [];
         let cmd = new BotCommand(undefined, txt => embeds.push(txt));
-        
+
         const refresh_monitor = async () => {
             embeds = [];
-            await cmd.price();
             await cmd.stats();
             await cmd.earnings();
+            await cmd.price();
             channel.bulkDelete(50).then(async () => {
                 for (let emb of embeds)
                     await channel.send(emb);
@@ -130,6 +130,20 @@ function configure_systemd(name) {
     process.exit();
 }
 function get_ticker(ticker) {
+    let exch;
+    if (Array.isArray(ticker))
+        exch = ticker[0];
+    else
+        exch = ticker;
+
+    if (cache.get_ticker) {
+        if (cache.get_ticker[exch]) {
+            if (cache.get_ticker[exch].expire > Date.now()) {
+                return cache.get_ticker[exch].value;
+            }
+        }
+    }
+
     return new Promise((resolve, reject) => {
 
         const js_request = (url, fn) => {
@@ -138,7 +152,12 @@ function get_ticker(ticker) {
                     fn(JSON.parse(x));
                 }
                 catch (e) { /**/ }
-                resolve(exdata);
+//                console.log("exdata > ", exdata);
+                if (!cache.get_ticker) cache.get_ticker = {};
+                if (!cache.get_ticker[exch]) cache.get_ticker[exch] = {};
+                cache.get_ticker[exch].expire = Date.now() + 15*1000;
+                cache.get_ticker[exch].value = exdata;
+                resolve(cache.get_ticker[exch].value);
             }).catch(() => resolve(exdata));
         };
         const ternary_try = (fn_try, res_catch) => {
@@ -171,8 +190,26 @@ function get_ticker(ticker) {
                 js_request(`https://api.crypto-bridge.org/api/v1/ticker/${coin_up[0]}_${coin_up[1]}`, res => exdata.fillj(res, "last", "volume", "bid", "ask", "percentChange"));
                 break;
             }
+            case "citex": {
+                exdata.link = `https://www.citex.co.kr/#/trade/${coin_up[0]}_${coin_up[1]}`;
+                js_request(`https://api.citex.co.kr/v1/markets/common/ticker`, res => {
+                    tmp = res.find(x => x.symbol === `${coin_up[0]}_${coin_up[1]}`);
+                    exdata.fill(tmp["lastPrice"], tmp["volume"]*tmp["lastPrice"], null, null, tmp["ratio"]*100);
+                });
+                break;
+            }
+            case "stakecube": {
+                exdata.link = `https://stakecube.net/exchange/${coin_up[1]}-${coin_up[0]}`;
+                js_request(`https://stakecube.net/api/v1/exchange/tickers?base=${coin_up[1]}&target=${coin_up[0]}`, res => exdata.fillj(res[0], "last_price", "volume", "bid", "ask", "percentChange"));
+                break;
+            }
+            case "midex": { // birake based
+                exdata.link = `https://esbc.pro/link/exchange/midex`;//`https://dex.midas.investments/market/BIRAKE.${coin_up[0]}_BIRAKE.${coin_up[1]}`;
+                js_request(`https://api.birake.com/public/ticker/`, res => exdata.fillj(res.find(x => x.base === coin_up[1] && x.quote === coin_up[0]), "latest", "base_volume", "highest_bid", "lowest_ask", "percent_change"));
+                break;
+            }
             case "crex24": {
-                exdata.link = `https://crex24.com/exchange/${coin_up[0]}-${coin_up[1]}`;
+                exdata.link = `https://esbc.pro/link/exchange/crex`;//`https://crex24.com/exchange/${coin_up[0]}-${coin_up[1]}`;
                 js_request(`https://api.crex24.com/v2/public/tickers?instrument=${coin_up[0]}-${coin_up[1]}`, res => exdata.fillj(res[0], "last", "volumeInBtc", "bid", "ask", "percentChange"));
                 break;
             }
@@ -182,7 +219,7 @@ function get_ticker(ticker) {
                 break;
             }
             case "graviex": {
-                exdata.link = `https://graviex.net/markets/${coin_lw[0]}${coin_lw[1]}`;
+                exdata.link = `https://esbc.pro/link/exchange/graviex`;//`https://graviex.net/markets/${coin_lw[0]}${coin_lw[1]}`;
                 js_request(`https://graviex.net:443/api/v2/tickers/${coin_lw[0]}${coin_lw[1]}.json`, res => exdata.fillj(res["ticker"], "last", "volbtc", "buy", "sell", "change"));
                 break;
             }
@@ -197,10 +234,10 @@ function get_ticker(ticker) {
                 break;
             }
             case "stex": {
-                exdata.link = `https://app.stex.com/en/trade/pair/${coin_up[1]}/${coin_up[0]}`;
+                exdata.link = `https://esbc.pro/link/exchange/stex`;//`https://app.stex.com/en/trade/pair/${coin_up[1]}/${coin_up[0]}`;
                 js_request(`https://app.stex.com/api2/ticker`, res => {
                     tmp = res.find(x => x.market_name === `${coin_up[0]}_${coin_up[1]}`);
-                    exdata.fill(tmp["last"], (parseFloat(tmp["last"]) + parseFloat(tmp["lastDayAgo"])) / 2 * tmp["vol"], tmp["ask"], tmp["bid"], tmp["lastDayAgo"] !== 0 ? (tmp["last"] / tmp["lastDayAgo"] - 1) * 100 : 0); // volume and change not 100% accurate
+                    exdata.fill(tmp["last"], (parseFloat(tmp["last"]) + parseFloat(tmp["lastDayAgo"])) / 2 * tmp["vol"], tmp["bid"], tmp["ask"], tmp["lastDayAgo"] !== 0 ? (tmp["last"] / tmp["lastDayAgo"] - 1) * 100 : 0); // volume and change not 100% accurate
                 });
                 break;
             }
@@ -291,7 +328,7 @@ function get_ticker(ticker) {
                         exdata.fillj(res, "last", "", "buy", "sell", "chg");
                         exdata.volume = ternary_try(() => {
                             let vol = 0.00;
-                            for (let x of JSON.parse(ohlc).filter(x => x[5] > 0)) 
+                            for (let x of JSON.parse(ohlc).filter(x => x[5] > 0))
                                 vol += x.slice(1, 5).reduce((pv, cv) => pv + cv) / 4 * x[5];
                             return vol.toFixed(8);
                         }, "Error");
@@ -305,11 +342,17 @@ function get_ticker(ticker) {
                 resolve(exdata);
             }
         }
-        
+
     });
 }
 function price_avg() {
     return new Promise((resolve, reject) => {
+        if (cache.price_avg) {
+            if (cache.price_avg.expire > Date.now()) {
+                resolve(cache.price_avg.value);
+                return;
+            }
+        }
         let promises = [];
         for (let ticker of conf.ticker.filter(x => !Array.isArray(x) || x[2].toUpperCase() === "BTC"))
             promises.push(get_ticker(ticker));
@@ -321,19 +364,33 @@ function price_avg() {
                 weight += x.volume;
             });
             values.forEach(x => price += parseFloat(x.price) * (weight !== 0 ? x.volume / weight : 1 / values.length));
-            resolve(values.length === 0 ? undefined : price);
+            if (!cache.price_avg) cache.price_avg = {};
+            cache.price_avg.expire = Date.now() + 30*1000;
+            cache.price_avg.value = values.length === 0 ? undefined : price;
+            resolve(cache.price_avg.value);
         });
     });
 }
 function price_btc_usd() {
     return new Promise((resolve, reject) => {
+        if (cache.price_btc_usd) {
+//            console.log("cache.price_btc_usd >", cache.price_btc_usd);
+            if (cache.price_btc_usd.expire > Date.now()) {
+//                console.log("return from cache");
+                resolve(cache.price_btc_usd.value);
+                return;
+            }
+        }
         let req = new XMLHttpRequest();
         req.open("GET", "https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD");
         req.onreadystatechange = () => {
             if (req.readyState === 4) {
                 if (req.status === 200) {
                     try {
-                        resolve(JSON.parse(req.responseText)["USD"]);
+                        if (!cache.price_btc_usd) cache.price_btc_usd = {};
+                        cache.price_btc_usd.expire = Date.now() + 10*60*1000;
+                        cache.price_btc_usd.value = JSON.parse(req.responseText)["USD"];
+                        resolve(cache.price_btc_usd.value);
                     }
                     catch (e) { /**/ }
                 }
@@ -344,11 +401,43 @@ function price_btc_usd() {
     });
 }
 function request_mncount() {
+    if (cache.request_mncount) {
+        if (cache.request_mncount.expire > Date.now()) {
+            return cache.request_mncount.value;
+        }
+    }
     let cmd_res = bash_cmd(conf.requests.mncount);
     try {
         let json = JSON.parse(cmd_res);
-        if (json["enabled"] !== undefined)
-            return json["enabled"].toString();
+//        if (json["enabled"] !== undefined)
+//            return json["enabled"].toString();
+        if (json["masternodeTotal"] !== undefined){
+            json["masternodeCount"].forEach(function(item){
+                conf.tiers[item.level].mncount = item.count;
+            });
+            json["masternodereward"].forEach(function(item){
+                conf.tiers[item.level].mnreward = item.reward;
+            });
+            conf.blockreward = json["blockreward"];
+            conf.posreward = json["posreward"];
+            conf.devfee = json["devfee"];
+            conf.locked = json["locked"];
+
+            // block timing update, based on time
+            var currentTime = Date.now() / 1000 | 0;
+            if (currentTime <= 1554746400) conf.blocktime = 60;
+            if (currentTime > 1554746400) conf.blocktime = 70;
+            if (currentTime > 1554746400 + 1 * 604800) conf.blocktime = 80;
+            if (currentTime > 1554746400 + 2 * 604800) conf.blocktime = 90;
+            if (currentTime > 1554746400 + 3 * 604800) conf.blocktime = 100;
+            if (currentTime > 1554746400 + 4 * 604800) conf.blocktime = 110;
+            if (currentTime > 1554746400 + 5 * 604800) conf.blocktime = 120;
+
+            if (!cache.request_mncount) cache.request_mncount = {};
+            cache.request_mncount.expire = Date.now() + 30*1000;
+            cache.request_mncount.value = json["masternodeTotal"].toString();
+            return cache.request_mncount.value;
+        }
     }
     catch (e) { /**/ }
     cmd_res = cmd_res.toString().replace("\n", "").trim();
@@ -369,7 +458,7 @@ function earn_fields(coinday, avgbtc, priceusd) {
             value: earn_value(1),
             inline: true
         },
-        {
+/*        {
             name: "Weekly",
             value: earn_value(7),
             inline: true
@@ -383,7 +472,7 @@ function earn_fields(coinday, avgbtc, priceusd) {
             name: "Yearly",
             value: earn_value(365),
             inline: true
-        }
+        }*/
     ];
 }
 function get_stage(blk) {
@@ -436,7 +525,7 @@ function simple_message(title, descr, color = conf.color.explorer) {
 
 class BotCommand {
 
-    /** @param {Discord.Message} msg - 
+    /** @param {Discord.Message} msg -
       * @param {Function} fn_send - */
     constructor(msg, fn_send = txt => this.msg.channel.send(txt)) {
         this.msg = msg;
@@ -464,11 +553,11 @@ class BotCommand {
             for (let data of values) {
                 embed.addField(
                     data.name,
-                    hide_undef("**| Price** : ", data.price) +
-                    hide_undef("**| Vol** : ", data.volume) +
-                    hide_undef("**| Buy** : ", data.buy) +
-                    hide_undef("**| Sell** : ", data.sell) +
-                    hide_undef("**| Chg** : ", data.change) +
+                    hide_undef("**Price** : ", data.price) +
+                    hide_undef("**Vol** : ", data.volume) +
+                    hide_undef("**Buy** : ", data.buy) +
+                    hide_undef("**Sell** : ", data.sell) +
+                    hide_undef("**Chg** : ", data.change) +
                     "[Link](" + data.link + ")",
                     true
                 );
@@ -486,7 +575,7 @@ class BotCommand {
             new Promise((resolve, reject) => resolve(request_mncount())),
             new Promise((resolve, reject) => resolve(bash_cmd(conf.requests.supply)))
         ]).then(([blockcount, mncount, supply]) => {
-            
+
             let valid = {
                 blockcount: !isNaN(blockcount) && blockcount.trim() !== "",
                 mncount: !isNaN(mncount) && mncount.trim() !== "",
@@ -499,7 +588,7 @@ class BotCommand {
             let embed = new Discord.RichEmbed();
             embed.title = conf.coin + " Stats";
             embed.color = conf.color.coininfo;
-            embed.timestamp = new Date();
+            //embed.timestamp = new Date();
 
             for (let stat of conf.statorder) {
                 switch (stat) {
@@ -510,37 +599,87 @@ class BotCommand {
                     }
                     case "mncount": {
                         if (valid.mncount)
-                            embed.addField("MN Count", mncount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","), true);
+                            embed.addField("MN Count Total", mncount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","), true);
                         break;
                     }
-                    case "supply": { 
+                    case "blockreward": {
+                        embed.addField("Block Reward", conf.blockreward + " " + conf.coin, true);
+                        break;
+                    }
+                    case "devfee": {
+                        embed.addField("Dev Fee", conf.devfee + "%", true);
+                        break;
+                    }
+                    case "supply": {
                         if (valid.supply)
-                            embed.addField("Supply", parseFloat(supply).toFixed(4).replace(/(\d)(?=(?:\d{3})+(?:\.|$))|(\.\d{4}?)\d*$/g, (m, s1, s2) => s2 || s1 + ',') + " " + conf.coin, true);
+                            embed.addField("Supply" + " (" + conf.coin + ")",
+                            parseFloat(supply).toFixed(4).replace(/(\d)(?=(?:\d{3})+(?:\.|$))|(\.\d{4}?)\d*$/g, (m, s1, s2) => s2 || s1 + ',') +
+                            "\n(" + (supply / 25481245 * 100).toFixed(2) + "%)",
+                            true);
                         break;
                     }
-                    case "collateral": { 
+                    case "collateral": {
                         if (valid.blockcount)
                             embed.addField("Collateral", stage.coll.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + conf.coin, true);
                         break;
                     }
-                    case "mnreward": { 
+                    case "mninf1": {
+                        var mtier = 1;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mninf2": {
+                        var mtier = 2;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mninf3": {
+                        var mtier = 3;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mninf4": {
+                        var mtier = 4;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mnreward": {
                         if (valid.blockcount)
                             embed.addField("MN Reward", stage.mn + " " + conf.coin, true);
                         break;
                     }
-                    case "powreward": { 
+                    case "powreward": {
                         if (stage.pow !== undefined && valid.blockcount)
                             embed.addField("POW Reward", stage.pow + " " + conf.coin, true);
                         break;
                     }
                     case "posreward": {
-                        if (stage.pos !== undefined && valid.blockcount)
-                            embed.addField("POS Reward", stage.pos + " " + conf.coin, true);
+                        embed.addField("POS Reward", conf.posreward + " " + conf.coin, true);
                         break;
                     }
-                    case "locked": { 
+                    case "locked": {
                         if (valid.blockcount && valid.mncount && valid.supply)
-                            embed.addField("Locked", (mncount * stage.coll).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + conf.coin + " (" + (mncount * stage.coll / supply * 100).toFixed(2) + "%)", true);
+                            embed.addField("Locked Total", (conf.locked).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + conf.coin + " (" + (conf.locked / supply * 100).toFixed(2) + "%)", true);
                         break;
                     }
                     case "avgmnreward": {
@@ -554,7 +693,7 @@ class BotCommand {
                             embed.addField("1st MN Reward", parseInt(x3mncount / (86400 / conf.blocktime)) + "d " + parseInt(x3mncount / (3600 / conf.blocktime) % 24) + "h " + parseInt(x3mncount / (60 / conf.blocktime) % 60) + "m", true);
                         break;
                     }
-                    case "nextstage": { 
+                    case "nextstage": {
                         if (valid.blockcount)
                             embed.addField("Next Stage", parseInt((conf.stages[stg_index].block - blockcount) / (86400 / conf.blocktime)) + "d " + parseInt((conf.stages[stg_index].block - blockcount) / (3600 / conf.blocktime) % 24) + "h " + parseInt((conf.stages[stg_index].block - blockcount) / (60 / conf.blocktime) % 60) + "m", true);
                         break;
@@ -565,7 +704,133 @@ class BotCommand {
                     }
                 }
             }
-            
+
+            if (valid_request("blockcount") && !valid.blockcount)
+                embed.description = (embed.description === undefined ? "" : embed.description) + "There seems to be a problem with the `blockcount` request\n";
+            if (valid_request("mncount") && !valid.mncount)
+                embed.description = (embed.description === undefined ? "" : embed.description) + "There seems to be a problem with the `mncount` request\n";
+            if (valid_request("supply") && !valid.supply)
+                embed.description = (embed.description === undefined ? "" : embed.description) + "There seems to be a problem with the `supply` request";
+
+            this.fn_send(embed);
+
+            embed = new Discord.RichEmbed();
+            embed.title = conf.coin + " Masternode Stats";
+            embed.color = conf.color.coininfo;
+            //embed.timestamp = new Date();
+
+            for (let stat of conf.statorderMN) {
+                switch (stat) {
+                    case "blockcount": {
+                        if (valid.blockcount)
+                            embed.addField("Block Count", blockcount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","), true);
+                        break;
+                    }
+                    case "mncount": {
+                        if (valid.mncount)
+                            embed.addField("MN Count Total", mncount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","), true);
+                        break;
+                    }
+                    case "blockreward": {
+                        embed.addField("Block Reward", conf.blockreward + " " + conf.coin, true);
+                        break;
+                    }
+                    case "devfee": {
+                        embed.addField("Dev Fee", conf.devfee + "%", true);
+                        break;
+                    }
+                    case "supply": {
+                        if (valid.supply)
+                            embed.addField("Supply", parseFloat(supply).toFixed(4).replace(/(\d)(?=(?:\d{3})+(?:\.|$))|(\.\d{4}?)\d*$/g, (m, s1, s2) => s2 || s1 + ',') + " " + conf.coin, true);
+                        break;
+                    }
+                    case "collateral": {
+                        if (valid.blockcount)
+                            embed.addField("Collateral", stage.coll.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + conf.coin, true);
+                        break;
+                    }
+                    case "mninf1": {
+                        var mtier = 1;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mninf2": {
+                        var mtier = 2;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mninf3": {
+                        var mtier = 3;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mninf4": {
+                        var mtier = 4;
+                        var mcount = conf.tiers[mtier].mncount;
+                        embed.addField("MN " + conf.tiers[mtier].label,
+                            "Count: " + mcount + "\n" +
+                            "Reward: " + conf.tiers[mtier].mnreward + " " + conf.coin + "\n" +
+                            "Avg.Reward: " + parseInt(mcount / (3600 / conf.blocktime)) + "h " + parseInt(mcount / (60 / conf.blocktime) % 60) + "m",
+                            true);
+                        break;
+                    }
+                    case "mnreward": {
+                        if (valid.blockcount)
+                            embed.addField("MN Reward", stage.mn + " " + conf.coin, true);
+                        break;
+                    }
+                    case "powreward": {
+                        if (stage.pow !== undefined && valid.blockcount)
+                            embed.addField("POW Reward", stage.pow + " " + conf.coin, true);
+                        break;
+                    }
+                    case "posreward": {
+                        embed.addField("POS Reward", conf.posreward + " " + conf.coin, true);
+                        break;
+                    }
+                    case "locked": {
+                        if (valid.blockcount && valid.mncount && valid.supply)
+                            embed.addField("Locked Total", (conf.locked).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + conf.coin + " (" + (conf.locked / supply * 100).toFixed(2) + "%)", true);
+                        break;
+                    }
+                    case "avgmnreward": {
+                        if (valid.mncount)
+                            embed.addField("Avg. MN Reward", parseInt(mncount / (86400 / conf.blocktime)) + "d " + parseInt(mncount / (3600 / conf.blocktime) % 24) + "h " + parseInt(mncount / (60 / conf.blocktime) % 60) + "m", true);
+                        break;
+                    }
+                    case "1stmnreward": {
+                        let x3mncount = mncount * 3;
+                        if (valid.mncount)
+                            embed.addField("1st MN Reward", parseInt(x3mncount / (86400 / conf.blocktime)) + "d " + parseInt(x3mncount / (3600 / conf.blocktime) % 24) + "h " + parseInt(x3mncount / (60 / conf.blocktime) % 60) + "m", true);
+                        break;
+                    }
+                    case "nextstage": {
+                        if (valid.blockcount)
+                            embed.addField("Next Stage", parseInt((conf.stages[stg_index].block - blockcount) / (86400 / conf.blocktime)) + "d " + parseInt((conf.stages[stg_index].block - blockcount) / (3600 / conf.blocktime) % 24) + "h " + parseInt((conf.stages[stg_index].block - blockcount) / (60 / conf.blocktime) % 60) + "m", true);
+                        break;
+                    }
+                    case "": {
+                        embed.addBlankField(true);
+                        break;
+                    }
+                }
+            }
+
             if (valid_request("blockcount") && !valid.blockcount)
                 embed.description = (embed.description === undefined ? "" : embed.description) + "There seems to be a problem with the `blockcount` request\n";
             if (valid_request("mncount") && !valid.mncount)
@@ -578,8 +843,10 @@ class BotCommand {
         });
     }
     stages() {
-        return new Promise((resolve, reject) => resolve(bash_cmd(conf.requests.blockcount))).then(blockcount => {
-
+        return Promise.all([
+            new Promise((resolve, reject) => resolve(bash_cmd(conf.requests.blockcount))),
+            new Promise((resolve, reject) => resolve(request_mncount()))
+        ]).then(([blockcount, mncount]) => {
             let embed = new Discord.RichEmbed();
             embed.title = conf.coin + " Stages";
             embed.color = conf.color.coininfo;
@@ -593,13 +860,16 @@ class BotCommand {
                 for (let i = stgindex; i < conf.stages.length && embed.fields.length < 25; i++) {
                     let laststage = i > 0 ? conf.stages[i - 1] : { block: 0, coll: 0 };
                     let days = (laststage.block - blockcount) / (86400 / conf.blocktime);
+                    let masternodes = "";
+                    for (var idx in conf.stages[i].mn)
+                        masternodes += "_MN " + conf.tiers[idx].label + ":_ "  + conf.stages[i].mn[idx] + "\n"
                     embed.addField(
                         "Stage " + (i + 1) + " (" + (days < 0 ? "current)" : days.toFixed(2) + " days)"),
                         (laststage.block !== 0 && i !== stgindex ? "_Block:_ " + laststage.block + "\n" : "") +
-                        (laststage.coll < conf.stages[i].coll && i !== stgindex ? "_New collateral:_ " + conf.stages[i].coll + "\n" : "") + 
-                        (conf.stages[i].mn  !== undefined ? "_MN reward:_ "  + conf.stages[i].mn  + "\n" : "") + 
-                        (conf.stages[i].pow !== undefined ? "_POW reward:_ " + conf.stages[i].pow + "\n" : "") +
-                        (conf.stages[i].pos !== undefined ? "_POS reward:_ " + conf.stages[i].pos + "\n" : ""),
+                        (laststage.coll < conf.stages[i].coll && i !== stgindex ? "_New collateral:_ " + conf.stages[i].coll + "\n" : "") +
+                        (conf.stages[i].pos !== undefined ? "_POS reward:_ " + conf.stages[i].pos + "\n" : "") +
+                        (conf.stages[i].mn  !== undefined ? masternodes : "") +
+                        (conf.stages[i].pow !== undefined ? "_POW reward:_ " + conf.stages[i].pow + "\n" : ""),
                         true
                     );
                 }
@@ -607,12 +877,12 @@ class BotCommand {
 
             if (embed.fields.length > 3 && embed.fields.length % 3 === 2) // fix bad placing if a row have 2 tickers
                 embed.addBlankField(true);
-            
+
             this.fn_send(embed);
 
         });
     }
-    earnings(mns) {
+    earnings(mns, tier) {
         return Promise.all([
             new Promise((resolve, reject) => resolve(bash_cmd(conf.requests.blockcount))),
             new Promise((resolve, reject) => resolve(request_mncount())),
@@ -626,34 +896,39 @@ class BotCommand {
             };
 
             if (valid.blockcount && valid.mncount) {
-                mns = mns !== undefined && mns > 0 ? mns : 1;
-                let stage = get_stage(blockcount);
-                let coinday = 86400 / conf.blocktime / mncount * stage.mn;
-                this.fn_send({
-                    embed: {
-                        title: conf.coin + " Earnings" + (mns !== 1 ? " (" + mns + " MNs)" : ""),
-                        color: conf.color.coininfo,
-                        fields: [
-                            {
-                                name: "ROI",
-                                value: (36500 / (stage.coll / coinday)).toFixed(2) + "%\n" + (stage.coll / coinday).toFixed(2) + " days",
-                                inline: true
-                            },
-                            {
-                                name: "MN Price",
-                                value: (stage.coll * avgbtc).toFixed(8) + " BTC\n" + (stage.coll * avgbtc * priceusd).toFixed(2) + " USD",
-                                inline: true
-                            }
-                        ].concat(mns === 1 ? [{ name: "\u200b", value: "\u200b", inline: true }] : [
-                            {
-                                name: "Time to get 1 MN",
-                                value: (stage.coll / (coinday * mns)).toFixed(2) + " days",
-                                inline: true
-                            }
-                        ]).concat(earn_fields(coinday * mns, avgbtc, priceusd)),
-                        timestamp: new Date()
-                    }
-                });
+                for ( var key in conf.tiers ) {
+                    if (tier !== undefined && tier > 0 && tier <= 4 && tier != key)
+                        continue;
+//                    tier = tier !== undefined && tier > 0 && tier <= 4 ? tier : 1;
+                    mns = mns !== undefined && mns > 0 ? mns : 1;
+                    let stage = get_stage(blockcount);
+                    let coinday = 86400 / conf.blocktime / conf.tiers[key].mncount * conf.tiers[key].mnreward;
+                    this.fn_send({
+                        embed: {
+                            title: conf.coin + " " + conf.tiers[key].label + " Earnings" + (mns !== 1 ? " (" + mns + " MNs)" : ""),
+                            color: conf.tiers[key].color,// conf.color.coininfo,
+                            fields: [
+                                {
+                                    name: "ROI",
+                                    value: (36500 / (stage.coll[key] / coinday)).toFixed(2) + "%\n" + (stage.coll[key] / coinday).toFixed(2) + " days",
+                                    inline: true
+                                },
+                                {
+                                    name: "MN Price",
+                                    value: stage.coll[key] + " ESBC\n" + (stage.coll[key] * avgbtc).toFixed(8) + " BTC\n" + (stage.coll[key] * avgbtc * priceusd).toFixed(2) + " USD",
+                                    inline: true
+                                }
+                            ]/*.concat(mns === 1 ? [{ name: "\u200b", value: "\u200b", inline: true }] : [
+                                {
+                                    name: "Time to get 1 MN",
+                                    value: (stage.coll / (coinday * mns)).toFixed(2) + " days",
+                                    inline: true
+                                }
+                            ])*/.concat(earn_fields(coinday * mns, avgbtc, priceusd)),
+//                            timestamp: new Date()
+                        }
+                    });
+                }
             }
             else {
                 this.fn_send({
@@ -918,7 +1193,7 @@ class BotCommand {
         create_no_exists(users_mn_folder);
         for (let addr of addrs) {
             try {
-                let json = JSON.parse(bash_cmd(conf.requests.mnstat + addr));
+                let json = JSON.parse(bash_cmd(conf.requests.mnlist + addr));
                 if (Array.isArray(json))
                     json = json[0];
                 if (json["status"] !== undefined && json["addr"] === addr) {
@@ -971,7 +1246,7 @@ class BotCommand {
         for (let addr of fs.readFileSync(users_mn_folder + "/" + this.msg.author.id + ".txt", "utf8").split(/\r?\n/).filter(Boolean)) {
             mn_str += "`" + addr + "`";
             try {
-                let json = JSON.parse(bash_cmd(conf.requests.mnstat + addr));
+                let json = JSON.parse(bash_cmd(conf.requests.mnlist + addr));
                 if (Array.isArray(json))
                     json = json[0];
                 if (json["status"] !== undefined && json["addr"] !== undefined)
@@ -1058,9 +1333,9 @@ class BotCommand {
                         name: "Coin Info:",
                         value:
                             " - **" + conf.prefix + "stats** : get the current stats of the " + conf.coin + " blockchain\n" +
-                            " - **" + conf.prefix + "stages** : get the info of the upcoming reward structures\n" +
-                            " - **" + conf.prefix + "earnings [amount of MNs]** : get the expected earnings per masternode, aditionally you can put the amount of MNs\n" +
-                            " - **" + conf.prefix + "mining <hashrate> [K/M/G/T]** : get the expected earnings with the given hashrate, aditionally you can put the hashrate multiplier (K = KHash/s, M = MHash/s, ...)"
+//                            " - **" + conf.prefix + "stages** : get the info of the upcoming reward structures\n" +
+                            " - **" + conf.prefix + "earnings [amount of MNs] [tier 1..4]** : get the expected earnings per masternode, aditionally you can put the amount of MNs\n"
+//                            " - **" + conf.prefix + "mining <hashrate> [K/M/G/T]** : get the expected earnings with the given hashrate, aditionally you can put the hashrate multiplier (K = KHash/s, M = MHash/s, ...)"
                     },
                     {
                         name: "Explorer",
@@ -1088,14 +1363,15 @@ class BotCommand {
                     {
                         name: "Other:",
                         value:
-                            " - **" + conf.prefix + "help** : the command that you just used\n" +
-                            " - **" + conf.prefix + "about** : know more about me :smirk:"
+                            " - **" + conf.prefix + "help** : the command that you just used\n"
+//                            " - **" + conf.prefix + "about** : know more about me :smirk:"
                     },
                     {
                         name: "Admins only:",
                         value:
                             " - **" + conf.prefix + "conf-get** : retrieve the bot config via dm\n" +
-                            " - **" + conf.prefix + "conf-set** : set a new config to the bot via dm"
+                            " - **" + conf.prefix + "conf-set** : set a new config to the bot via dm\n" +
+                            " - **" + conf.prefix + "embed** : print embed message to channel"
                     }
                 ]
             }
@@ -1157,7 +1433,36 @@ class BotCommand {
             });
         });
     }
+    embed_print() {
+        this.fn_send(simple_message("Put the embed object code here, you have 90 seconds to put code")).then(reply => {
+            reply.delete(90000);
+//        this.msg.author.send("Put the embed object code here, you have 90 seconds to put code").then(reply => {
+            let msgcol = new Discord.MessageCollector(reply.channel, m => m.author.id === this.msg.author.id, { time: 90000 });
+            msgcol.on("collect", async (elem, col) => {
+                reply.delete(1000);
+                msgcol.stop("received");
+                try {
+                    let start_json = elem.content.indexOf("{");
+                    let end_json = elem.content.lastIndexOf("}");
+                    let embed_code = elem.content.substring(start_json, end_json + 1);
+                    elem.delete(5000);
+                    embed_code = JSON.parse(embed_code);
+                    this.fn_send(embed_code);
+                    //this.msg.author.send("", embed_code);
+                    //this.msg.author.send(target_id);
+                    //this.msg.author.send(elem.content);
+                }
+                catch (e) {
+                    this.fn_send(simple_message("Something seems wrong with code you sent, check that everything is okay and try again")).then(reply => {reply.delete(10000);});
+                }
 
+            });
+            msgcol.on("end", (col, reason) => {
+                if (reason === "time")
+                    this.fn_send(simple_message("Embed timeout, any text posted from now i'll be ignored")).then(reply => {reply.delete(10000);});
+            });
+        });
+      }
 }
 
 
@@ -1191,9 +1496,10 @@ process.on("unhandledRejection", err => {
     process.exit();
 });
 client.on("message", msg => {
-    
-    if (conf.channel.length && !conf.channel.includes(msg.channel.id) || !msg.content.startsWith(conf.prefix) || msg.author.bot)
-        return;
+
+    if (!conf.devs.includes(msg.author.id))
+        if (conf.channel.length && !conf.channel.includes(msg.channel.id) || !msg.content.startsWith(conf.prefix) || msg.author.bot)
+            return;
 
     let args = msg.content.slice(conf.prefix.length).split(" ").filter(x => x.length);
     let cmd = new BotCommand(msg);
@@ -1237,7 +1543,7 @@ client.on("message", msg => {
 
     switch (args[0]) {
 
-        // Exchanges: 
+        // Exchanges:
 
         case "price": {
             cmd.price();
@@ -1251,14 +1557,14 @@ client.on("message", msg => {
                 cmd.stats();
             break;
         }
-        case "stages": {
+/*        case "stages": {
             if (enabled_cmd("stages", valid_request("blockcount")))
                 cmd.stages();
             break;
-        }
+        }*/
         case "earnings": {
             if (enabled_cmd("earnings", valid_request("blockcount") && valid_request("mncount")))
-                cmd.earnings(args[1]);
+                cmd.earnings(args[1], args[2]);
             break;
         }
         case "mining": {
@@ -1286,7 +1592,7 @@ client.on("message", msg => {
         }
 
         // User addresses:
-        
+
         case "my-address-add": {
             if (enabled_cmd("my-address-add", conf.useraddrs || valid_request("balance")) && !error_noparam(1, "You need to provide at least one address"))
                 cmd.my_address_add(args.slice(1));
@@ -1311,22 +1617,22 @@ client.on("message", msg => {
         // User masternodes:
 
         case "my-masternode-add": {
-            if (enabled_cmd("my-masternode-add", conf.useraddrs || valid_request("mnstat") || valid_request("blockcount") || valid_request("mncount")) && !error_noparam(1, "You need to provide at least one address"))
+            if (enabled_cmd("my-masternode-add", conf.useraddrs || valid_request("mnlist") || valid_request("blockcount") || valid_request("mncount")) && !error_noparam(1, "You need to provide at least one address"))
                 cmd.my_masternode_add(args.slice(1));
             break;
         }
         case "my-masternode-del": {
-            if (enabled_cmd("my-masternode-del", conf.useraddrs || valid_request("mnstat") || valid_request("blockcount") || valid_request("mncount")) && !error_noparam(1, "You need to provide at least one address"))
+            if (enabled_cmd("my-masternode-del", conf.useraddrs || valid_request("mnlist") || valid_request("blockcount") || valid_request("mncount")) && !error_noparam(1, "You need to provide at least one address"))
                 cmd.my_masternode_del(args.slice(1));
             break;
         }
         case "my-masternode-list": {
-            if (enabled_cmd("my-masternode-list", conf.useraddrs || valid_request("mnstat") || valid_request("blockcount") || valid_request("mncount")))
+            if (enabled_cmd("my-masternode-list", conf.useraddrs || valid_request("mnlist") || valid_request("blockcount") || valid_request("mncount")))
                 cmd.my_masternode_list();
             break;
         }
         case "my-earnings": {
-            if (enabled_cmd("my-earnings", conf.useraddrs || valid_request("mnstat") || valid_request("blockcount") || valid_request("mncount")))
+            if (enabled_cmd("my-earnings", conf.useraddrs || valid_request("mnlist") || valid_request("blockcount") || valid_request("mncount")))
                 cmd.my_earnings();
             break;
         }
@@ -1374,6 +1680,13 @@ client.on("message", msg => {
                 cmd.conf_set();
             break;
         }
+        case "embed": {
+            if (!error_noworthy()){
+                msg.delete(5000);
+                cmd.embed_print();
+            }
+            break;
+        }
 
     }
 
@@ -1388,4 +1701,3 @@ else if (process.argv.length >= 3 && process.argv[2] === "handled_child")
     });
 else
     handle_child();
-
